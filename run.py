@@ -34,9 +34,32 @@ def ingest(data_dir: Path, db: Path) -> None:
 
     Running this twice must not duplicate anything.
     """
+    sqlite_path = (data_dir / "qafila_oltp.sqlite").resolve().as_posix()
+    supplier_glob = (data_dir / "suppliers" / "prices_*.csv").resolve().as_posix()
+
     with duckdb.connect(str(db)) as con:  # closes the file before dbt opens it
         con.sql("CREATE SCHEMA IF NOT EXISTS raw")
-        raise NotImplementedError("Step 1: load the sources into the raw schema")
+
+        # App database: attach it read-only and copy the four tables as they are (Lab 1.1).
+        # CREATE OR REPLACE makes the load idempotent: a re-run replaces, never appends.
+        con.sql(f"ATTACH '{sqlite_path}' AS app (TYPE sqlite, READ_ONLY)")
+        for table in ["orders", "order_items", "products", "stores"]:
+            con.sql(f"CREATE OR REPLACE TABLE raw.{table} AS SELECT * FROM app.{table}")
+        con.sql("DETACH app")
+
+        # Supplier files: every column as text, so '9,49' and Arabic-Indic digits arrive untouched
+        # (parsing is staging's job, Lab 2.4). union_by_name lines up W39's renamed/reordered columns
+        # by name (unit_cost stays NULL there, cost_sar appears). filename keeps each row's source.
+        con.sql(f"""
+            CREATE OR REPLACE TABLE raw.supplier_prices AS
+            SELECT * EXCLUDE (filename),
+                   parse_filename(filename) AS source_file
+            FROM read_csv('{supplier_glob}', all_varchar = true, union_by_name = true,
+                          filename = true, header = true)
+        """)
+        n_files, n_rows = con.sql(
+            "SELECT count(DISTINCT source_file), count(*) FROM raw.supplier_prices").fetchone()
+        print(f"ingest: {n_rows} supplier rows from {n_files} files")
 
 
 def transform(db: Path) -> None:
