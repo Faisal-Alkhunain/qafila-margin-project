@@ -12,12 +12,15 @@ import argparse
 import os
 import subprocess
 import sys
+import uuid
 from pathlib import Path
 
 import duckdb
 import polars as pl
 import pyarrow as pa
 from pyiceberg.catalog.sql import SqlCatalog
+from pyiceberg.io.pyarrow import _dataframe_to_data_files
+from pyiceberg.table import Table
 
 DBT_DIR = Path(__file__).resolve().parent / "dbt"
 
@@ -100,11 +103,7 @@ def publish(db: Path, warehouse: Path) -> None:
         if same_rows(table.scan().to_arrow(), data):
             print(f"publish: {name} unchanged ({data.num_rows} rows), no new snapshot")
             continue
-        # overwrite = one atomic commit that replaces the rows; earlier snapshots stay readable
-        if table.current_snapshot() is None:
-            table.append(data)
-        else:
-            table.overwrite(data)
+        replace_rows(table, data)
         print(f"publish: {name} -> {data.num_rows} rows, snapshot {table.current_snapshot().snapshot_id}")
 
 
@@ -121,6 +120,24 @@ PUBLISHED_TABLES = {
         SELECT source_file, sku, valid_from, raw_cost, reason
         FROM quality.price_quarantine ORDER BY source_file, sku, valid_from""",
 }
+
+
+def replace_rows(table: Table, data: pa.Table) -> None:
+    """Replace all rows of an Iceberg table in ONE snapshot, keeping the older snapshots readable.
+
+    table.overwrite() commits two snapshots (a delete that leaves the table empty, then an append),
+    so the snapshot before the current one would be an empty table. Here the old data files are
+    removed and the new ones added in a single OVERWRITE snapshot (APPEND on the first write).
+    """
+    commit_uuid = uuid.uuid4()
+    with table.transaction() as tx:
+        new_files = _dataframe_to_data_files(table_metadata=tx.table_metadata, write_uuid=commit_uuid,
+                                             df=data, io=table.io)
+        with tx.update_snapshot().overwrite(commit_uuid=commit_uuid) as snapshot:
+            for task in table.scan().plan_files():
+                snapshot.delete_data_file(task.file)
+            for data_file in new_files:
+                snapshot.append_data_file(data_file)
 
 
 def same_rows(current: pa.Table, new: pa.Table) -> bool:
