@@ -1,0 +1,17 @@
+version: 2
+
+models:
+  - name: price_quarantine
+    description: >
+      Grain: one row per supplier row that can't be used. unknown_sku when the trimmed SKU isn't in
+      products, otherwise invalid_cost when the cost isn't a positive number. raw_cost is the text
+      exactly as it appeared in the file.
+    columns:
+      - name: source_file
+        data_tests: [not_null]
+      - name: reason
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['unknown_sku', 'invalid_cost']

@@ -1,0 +1,46 @@
+version: 2
+
+models:
+  - name: product_cost_history
+    description: >
+      SCD2 history of supplier costs. Grain: one row per SKU per cost version, valid on
+      [valid_from, valid_to). A new version starts only when the cost changes; a week where the SKU
+      isn't quoted keeps the previous version open; for the same SKU and day the file whose name
+      sorts last wins (so prices_*_fix.csv replaces the original).
+    data_tests:
+      - unique:
+          arguments:
+            column_name: "sku || '|' || valid_from"
+    columns:
+      - name: sku
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_products')
+                field: sku
+      - name: unit_cost_sar
+        data_tests: [not_null]
+      - name: valid_from
+        data_tests: [not_null]
+
+unit_tests:
+  - name: test_scd2_versions_only_on_change_and_latest_file_wins
+    description: >
+      W37 repeats W36's cost (no new version); W38 doesn't quote the SKU (W36's version stays open);
+      W39 quotes 12.00 but W39_fix corrects it to 11.00, and the fix wins.
+    model: product_cost_history
+    given:
+      - input: ref('int_supplier_quotes_checked')
+        rows:
+          - {source_file: prices_2026-W36.csv,     sku: A, valid_from: "2026-08-31", unit_cost_sar: 10.0,   reason: null}
+          - {source_file: prices_2026-W37.csv,     sku: A, valid_from: "2026-09-07", unit_cost_sar: 10.001, reason: null}
+          - {source_file: prices_2026-W39.csv,     sku: A, valid_from: "2026-09-21", unit_cost_sar: 12.0,   reason: null}
+          - {source_file: prices_2026-W39_fix.csv, sku: A, valid_from: "2026-09-21", unit_cost_sar: 11.0,   reason: null}
+          - {source_file: prices_2026-W36.csv,     sku: B, valid_from: "2026-08-31", unit_cost_sar: 5.0,    reason: null}
+          - {source_file: prices_2026-W37.csv,     sku: B, valid_from: "2026-09-07", unit_cost_sar: -1.0,   reason: invalid_cost}
+    expect:
+      rows:
+        - {sku: A, unit_cost_sar: 10.0, valid_from: "2026-08-31", valid_to: "2026-09-21", is_current: false}
+        - {sku: A, unit_cost_sar: 11.0, valid_from: "2026-09-21", valid_to: null,         is_current: true}
+        - {sku: B, unit_cost_sar: 5.0,  valid_from: "2026-08-31", valid_to: null,         is_current: true}
