@@ -15,6 +15,8 @@ import sys
 from pathlib import Path
 
 import duckdb
+import polars as pl
+import pyarrow as pa
 from pyiceberg.catalog.sql import SqlCatalog
 
 DBT_DIR = Path(__file__).resolve().parent / "dbt"
@@ -83,7 +85,52 @@ def publish(db: Path, warehouse: Path) -> None:
     how we see what a number was before the supplier's correction arrived.
     """
     catalog = get_catalog(warehouse)
-    raise NotImplementedError("Step 5: publish the models to Iceberg")
+    with duckdb.connect(str(db), read_only=True) as con:
+        new_data = {name: con.sql(query).to_arrow_table() for name, query in PUBLISHED_TABLES.items()}
+
+    for name, data in new_data.items():
+        catalog.create_namespace_if_not_exists(name.split(".")[0])
+        if catalog.table_exists(name):
+            table = catalog.load_table(name)
+            with table.update_schema() as schema:  # new columns are added, nothing is dropped
+                schema.union_by_name(data.schema)
+        else:
+            table = catalog.create_table(name, schema=data.schema)
+
+        if same_rows(table.scan().to_arrow(), data):
+            print(f"publish: {name} unchanged ({data.num_rows} rows), no new snapshot")
+            continue
+        # overwrite = one atomic commit that replaces the rows; earlier snapshots stay readable
+        if table.current_snapshot() is None:
+            table.append(data)
+        else:
+            table.overwrite(data)
+        print(f"publish: {name} -> {data.num_rows} rows, snapshot {table.current_snapshot().snapshot_id}")
+
+
+# The three published tables: the contract's columns, in the contract's order.
+PUBLISHED_TABLES = {
+    "silver.product_cost_history": """
+        SELECT sku, unit_cost_sar, valid_from, valid_to, is_current
+        FROM silver.product_cost_history ORDER BY sku, valid_from""",
+    "gold.weekly_margin": """
+        SELECT iso_week, city, category, lines, revenue_sar, costed_revenue_sar, cost_sar, margin_sar,
+               uncosted_lines
+        FROM gold.weekly_margin ORDER BY iso_week, city, category""",
+    "quality.price_quarantine": """
+        SELECT source_file, sku, valid_from, raw_cost, reason
+        FROM quality.price_quarantine ORDER BY source_file, sku, valid_from""",
+}
+
+
+def same_rows(current: pa.Table, new: pa.Table) -> bool:
+    """True when the Iceberg table already holds exactly these rows (order ignored)."""
+    if current.num_rows != new.num_rows or set(current.column_names) != set(new.column_names):
+        return False
+    cols = new.column_names
+    a = pl.from_arrow(current).select(cols).sort(cols, nulls_last=True)
+    b = pl.from_arrow(new).select(cols).sort(cols, nulls_last=True)
+    return a.equals(b)
 
 
 def main() -> None:
