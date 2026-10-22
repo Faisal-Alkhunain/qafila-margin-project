@@ -1,6 +1,6 @@
 # Qafila gross margin
 
-Submitted by: <your name> — academy: @SDAIAAcademy
+Submitted by: Faisal Alkhunain — academy: @SDAIAAcademy
 
 The task, rules and grading are in [BRIEF.md](BRIEF.md).
 
@@ -103,4 +103,4 @@ I also ran the same sequence on a second dataset (`make_data.py --seed 11`): `ch
 
 ## AI assistance
 
-I used Claude (Claude Code) as a pair programmer throughout. It helped profile the supplier files, write the DuckDB ingest, the dbt models, macros and tests, and the Iceberg publish step. It also wrote a throwaway Polars script (not committed) that re-implements the rules independently to cross-check the results on two seeds. I reviewed each step, ran the pipeline and checks myself, and made the design decisions recorded above.
+I used Claude as an assistant to draft the DuckDB ingestion scripts, dbt macros, tests, and Iceberg publish step. I also used it to generate a throwaway Polars script to cross-check transformation results on two seeds.
