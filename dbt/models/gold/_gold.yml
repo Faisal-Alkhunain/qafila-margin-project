@@ -1,0 +1,31 @@
+version: 2
+
+models:
+  - name: fct_order_line_cost
+    description: >
+      Grain: one row per counted order line (order_id, line_no): order delivered, quantity > 0,
+      order_date (Riyadh) on or after 2026-08-31. unit_cost_sar comes from the product_cost_history
+      version with valid_from <= order_date < valid_to; NULL (is_costed = false) when none exists.
+    data_tests:
+      - unique:
+          arguments:
+            column_name: "order_id || '-' || line_no"
+    columns:
+      - name: city
+        data_tests: [not_null]
+      - name: category
+        data_tests: [not_null]
+
+  - name: weekly_margin
+    description: >
+      Grain: one row per iso_week x city x category with at least one counted line.
+      margin_sar = costed_revenue_sar - cost_sar; uncosted lines only count in lines and revenue_sar.
+    data_tests:
+      - unique:
+          arguments:
+            column_name: "iso_week || '|' || city || '|' || category"
+    columns:
+      - name: iso_week
+        data_tests: [not_null]
+      - name: lines
+        data_tests: [not_null]
