@@ -1,0 +1,69 @@
+version: 2
+
+models:
+  - name: stg_supplier_prices
+    description: >
+      Grain: one row per row of every supplier price file. Cost parsed from unit_cost (W36-W38)
+      or cost_sar (W39 on); SKU trimmed. Nothing is filtered here: silver decides what is usable.
+    columns:
+      - name: source_file
+        data_tests: [not_null]
+      - name: sku
+        data_tests: [not_null]
+      - name: valid_from
+        data_tests: [not_null]
+
+  - name: stg_products
+    description: "Grain: one row per product. SKU trimmed."
+    columns:
+      - name: product_id
+        data_tests: [unique, not_null]
+      - name: sku
+        description: Trimmed SKU, the join key with the supplier files.
+        data_tests: [unique, not_null]
+
+  - name: stg_stores
+    description: "Grain: one row per store."
+    columns:
+      - name: store_id
+        data_tests: [unique, not_null]
+
+  - name: stg_orders
+    description: "Grain: one row per order. order_date is the Riyadh calendar day (UTC+3)."
+    columns:
+      - name: order_id
+        data_tests: [unique, not_null]
+
+  - name: stg_order_items
+    description: "Grain: one row per order line (order_id, line_no)."
+    data_tests:
+      - unique:
+          arguments:
+            column_name: "order_id || '-' || line_no"
+    columns:
+      - name: product_id
+        data_tests:
+          - relationships:
+              arguments:
+                to: ref('stg_products')
+                field: product_id
+
+unit_tests:
+  - name: test_supplier_costs_are_parsed
+    description: Decimal commas, Arabic-Indic digits, the W39 cost_sar column and junk all parse as expected.
+    model: stg_supplier_prices
+    given:
+      - input: source('raw', 'supplier_prices')
+        rows:
+          - {source_file: a.csv, sku: "QF-1 ", valid_from: "2026-08-31", unit_cost: "7.71", cost_sar: null}
+          - {source_file: a.csv, sku: "QF-2",  valid_from: "2026-08-31", unit_cost: "9,49", cost_sar: null}
+          - {source_file: a.csv, sku: "QF-3",  valid_from: "2026-08-31", unit_cost: "٩٫٤٩", cost_sar: null}
+          - {source_file: b.csv, sku: "QF-4",  valid_from: "2026-09-21", unit_cost: null,   cost_sar: "-5.5"}
+          - {source_file: b.csv, sku: "QF-5",  valid_from: "2026-09-21", unit_cost: null,   cost_sar: "n/a"}
+    expect:
+      rows:
+        - {sku: "QF-1", raw_cost: "7.71", unit_cost_sar: 7.71}
+        - {sku: "QF-2", raw_cost: "9,49", unit_cost_sar: 9.49}
+        - {sku: "QF-3", raw_cost: "٩٫٤٩", unit_cost_sar: 9.49}
+        - {sku: "QF-4", raw_cost: "-5.5", unit_cost_sar: -5.5}
+        - {sku: "QF-5", raw_cost: "n/a",  unit_cost_sar: null}
